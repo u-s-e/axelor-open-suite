@@ -19,6 +19,9 @@ package com.axelor.apps.message.service;
 
 import com.axelor.apps.message.db.Message;
 import com.axelor.apps.message.db.repo.MessageRepository;
+import com.axelor.auth.AuthUtils;
+import com.axelor.auth.db.User;
+import com.axelor.auth.db.repo.UserRepository;
 import com.axelor.db.JpaSupport;
 import com.axelor.event.Observes;
 import com.axelor.events.ShutdownEvent;
@@ -36,16 +39,25 @@ import javax.persistence.PersistenceException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * Urban Solar
+ * <p>Overwrite AOS 5.3.8 to correct email send problems
+ * <p>Mail sent fails because user is null and generate a {@link NullPointerException}
+ * <p>TODO UPDATE VERSION : Remove after AOS v6.0.11
+ * <p>See <a href="https://github.com/axelor/axelor-open-suite/commit/0916465920db3086552b0f7df1927d874642d762">Axelor fix</a>
+ */
 @Singleton
 public class SendMailQueueService extends JpaSupport {
 
   private static final int ENTITY_FIND_TIMEOUT = 10000;
   private static final int ENTITY_FIND_INTERVAL = 200;
   protected MessageRepository messageRepository;
+  protected UserRepository userRepository;
 
   @Inject
-  public SendMailQueueService(MessageRepository messageRepository) {
+  public SendMailQueueService(MessageRepository messageRepository, UserRepository userRepository) {
     this.messageRepository = messageRepository;
+    this.userRepository = userRepository;
   }
 
   private final Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
@@ -60,6 +72,7 @@ public class SendMailQueueService extends JpaSupport {
   public void submitMailJob(MailBuilder mailBuilder, Message message) {
     long messageId = message.getId();
     log.debug("Submitting job to executor for message {}...", messageId);
+    User currentUser = AuthUtils.getUser();
     executor.submit(
         () -> {
           try {
@@ -78,6 +91,9 @@ public class SendMailQueueService extends JpaSupport {
                       updateMessage.setSentByEmail(true);
                       updateMessage.setStatusSelect(MessageRepository.STATUS_SENT);
                       updateMessage.setSentDateT(LocalDateTime.now());
+                      if (currentUser != null) {
+                        updateMessage.setSenderUser(userRepository.find(currentUser.getId()));
+                      }
                       messageRepository.save(updateMessage);
                     });
                 done = true;
@@ -105,6 +121,7 @@ public class SendMailQueueService extends JpaSupport {
   protected void onApplicationShutdown(@Observes ShutdownEvent event) {
     log.debug("Shutting down mail executor..");
     executor.shutdown();
+    log.debug("Mail executor stopped.");
   }
 
   private Message findMessage(Long messageId) {
